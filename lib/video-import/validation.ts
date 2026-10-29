@@ -1,5 +1,4 @@
 import { z } from "zod"
-import { extractYouTubeId } from "@/lib/utils"
 import {
   IMAGE_EXTENSIONS,
   IMAGE_FILE_MAX_BYTES,
@@ -7,7 +6,10 @@ import {
   JSON_FILE_MAX_BYTES,
   KNOWN_JSON_FIELDS,
   MAX_RECORDS_PER_IMPORT,
+  SUPPORTED_PLATFORMS,
+  type VideoPlatform,
 } from "./config"
+import { detectVideoPlatform, PLATFORM_LABELS } from "./platforms"
 
 export interface ValidationIssue {
   severity: "error" | "warning"
@@ -18,7 +20,8 @@ export interface ValidationIssue {
 
 export interface VideoRecordInput {
   videoUrl: string
-  youtubeId: string
+  platform: VideoPlatform
+  externalId: string
   videoTitle: string
   category: string
   channelName: string
@@ -38,6 +41,8 @@ export interface ImportValidationResult {
   categoryConflict: boolean
   channelNames: string[]
   channelConflict: boolean
+  platforms: VideoPlatform[]
+  platformCounts: Record<VideoPlatform, number>
   issues: ValidationIssue[]
 }
 
@@ -45,42 +50,58 @@ export type JsonReadResult =
   | { ok: true; text: string; issues: ValidationIssue[] }
   | { ok: false; issues: ValidationIssue[] }
 
-const videoRecordSchema = z.object({
-  category: z.string().trim().min(1, "must not be empty"),
-  channelName: z.string().trim().min(1, "must not be empty"),
-  videoTitle: z.string().trim().min(1, "must not be empty"),
-  videoUrl: z
-    .string()
-    .trim()
-    .min(1, "must not be empty")
-    .superRefine((value, ctx) => {
-      try {
-        const parsed = new URL(value)
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+const videoRecordSchema = z
+  .object({
+    category: z.string().trim().min(1, "must not be empty"),
+    channelName: z.string().trim().min(1, "must not be empty"),
+    videoTitle: z.string().trim().min(1, "must not be empty"),
+    videoUrl: z
+      .string()
+      .trim()
+      .min(1, "must not be empty")
+      .superRefine((value, ctx) => {
+        try {
+          const parsed = new URL(value)
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "must start with http:// or https://",
+            })
+            return
+          }
+        } catch {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: "must start with http:// or https://",
+            message:
+              "must be a full URL such as https://www.youtube.com/watch?v=... or https://x.com/user/status/...",
           })
           return
         }
-      } catch {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "must be a full URL such as https://www.youtube.com/watch?v=...",
-        })
-        return
-      }
 
-      if (!extractYouTubeId(value)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "must be a YouTube video link - the video player only supports YouTube",
-        })
-      }
-    }),
-  actualChannelName: z.string().trim().min(1, "must not be empty when provided").nullish(),
-  isUnrelatedChannel: z.boolean().optional().default(false),
-})
+        if (!detectVideoPlatform(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "must be a YouTube or X (Twitter) video link - the video player only supports those platforms",
+          })
+        }
+      }),
+    platform: z.enum(SUPPORTED_PLATFORMS).optional(),
+    actualChannelName: z.string().trim().min(1, "must not be empty when provided").nullish(),
+    isUnrelatedChannel: z.boolean().optional().default(false),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.platform) return
+
+    const detected = detectVideoPlatform(value.videoUrl)
+    if (detected && detected.platform !== value.platform) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["platform"],
+        message: `is "${value.platform}" but the video URL is a ${PLATFORM_LABELS[detected.platform]} link`,
+      })
+    }
+  })
 
 export function describeJsonParseError(rawMessage: string, text: string): string {
   const lineColumnMatch = rawMessage.match(/line (\d+) column (\d+)/i)
@@ -174,6 +195,8 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
       categoryConflict: false,
       channelNames: [],
       channelConflict: false,
+      platforms: [],
+      platformCounts: { youtube: 0, x: 0 },
       issues: [
         {
           severity: "error",
@@ -197,6 +220,8 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
       categoryConflict: false,
       channelNames: [],
       channelConflict: false,
+      platforms: [],
+      platformCounts: { youtube: 0, x: 0 },
       issues: [{ severity: "error", message: "The file contains no video records. Add at least one record." }],
     }
   }
@@ -244,11 +269,15 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
     }
 
     const value = result.data
+    const detected = detectVideoPlatform(value.videoUrl)
+    if (!detected) return
+
     records.push({
       sourceIndex: index,
       record: {
         videoUrl: value.videoUrl,
-        youtubeId: extractYouTubeId(value.videoUrl) ?? value.videoUrl,
+        platform: detected.platform,
+        externalId: detected.externalId,
         videoTitle: value.videoTitle,
         category: value.category,
         channelName: value.channelName,
@@ -270,7 +299,8 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
   let duplicateCount = 0
 
   records.forEach(({ record, sourceIndex }) => {
-    const firstIndex = seen.get(record.youtubeId)
+    const key = `${record.platform}:${record.externalId}`
+    const firstIndex = seen.get(key)
     if (firstIndex !== undefined) {
       duplicateCount += 1
       issues.push({
@@ -280,12 +310,17 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
       })
       return
     }
-    seen.set(record.youtubeId, sourceIndex)
+    seen.set(key, sourceIndex)
     uniqueRecords.push(record)
   })
 
   const categories = [...new Set(records.map(({ record }) => record.category))]
   const channelNames = [...new Set(records.map(({ record }) => record.channelName))]
+  const platformCounts: Record<VideoPlatform, number> = { youtube: 0, x: 0 }
+  for (const record of uniqueRecords) {
+    platformCounts[record.platform] += 1
+  }
+  const platforms = SUPPORTED_PLATFORMS.filter((platform) => platformCounts[platform] > 0)
 
   if (categories.length > 1) {
     issues.push({
@@ -315,6 +350,8 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
     categoryConflict: categories.length > 1,
     channelNames,
     channelConflict: channelNames.length > 1,
+    platforms,
+    platformCounts,
     issues,
   }
 }

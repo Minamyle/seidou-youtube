@@ -117,7 +117,8 @@ describe("validateVideoRecords", () => {
     expect(result.duplicateCount).toBe(0)
     expect(result.category).toBe("Music")
     expect(result.channelNames).toEqual(["DavidoVEVO"])
-    expect(result.records[0].youtubeId).toBe("3Iyuym-Gci0")
+    expect(result.records[0].platform).toBe("youtube")
+    expect(result.records[0].externalId).toBe("3Iyuym-Gci0")
     expect(result.records[0].actualChannelName).toBe("DavidoVEVO")
     expect(result.records[0].isUnrelatedChannel).toBe(false)
   })
@@ -236,6 +237,95 @@ describe("validateVideoRecords", () => {
     const result = validateVideoRecords([makeRecord({ extraField: "hello" })])
     expect(result.ok).toBe(true)
     expect(result.issues.some((issue) => issue.message.includes("extraField"))).toBe(true)
+  })
+
+  it("accepts X (Twitter) status links and detects the platform", () => {
+    const result = validateVideoRecords([
+      makeRecord({
+        videoUrl: "https://x.com/davido/status/1234567890123456789",
+        channelName: "@davido",
+        videoTitle: "Clip",
+      }),
+    ])
+
+    expect(result.ok).toBe(true)
+    expect(result.records[0].platform).toBe("x")
+    expect(result.records[0].externalId).toBe("1234567890123456789")
+    expect(result.platforms).toEqual(["x"])
+    expect(result.platformCounts).toEqual({ youtube: 0, x: 1 })
+  })
+
+  it("accepts twitter.com links with video suffixes and query strings", () => {
+    const result = validateVideoRecords([
+      makeRecord({ videoUrl: "https://twitter.com/davido/status/1234567890123456789/video/1?s=20" }),
+    ])
+
+    expect(result.ok).toBe(true)
+    expect(result.records[0].platform).toBe("x")
+    expect(result.records[0].externalId).toBe("1234567890123456789")
+  })
+
+  it("accepts x.com /i/web/status share links", () => {
+    const result = validateVideoRecords([
+      makeRecord({ videoUrl: "https://x.com/i/web/status/1234567890123456789" }),
+    ])
+
+    expect(result.ok).toBe(true)
+    expect(result.records[0].platform).toBe("x")
+    expect(result.records[0].externalId).toBe("1234567890123456789")
+  })
+
+  it("deduplicates the same X post across x.com and twitter.com", () => {
+    const result = validateVideoRecords([
+      makeRecord({ videoUrl: "https://x.com/davido/status/1234567890123456789" }),
+      makeRecord({ videoUrl: "https://twitter.com/davido/status/1234567890123456789" }),
+    ])
+
+    expect(result.duplicateCount).toBe(1)
+    expect(result.records).toHaveLength(1)
+  })
+
+  it("accepts an explicit platform that matches the URL", () => {
+    const result = validateVideoRecords([
+      makeRecord({ videoUrl: "https://x.com/davido/status/1234567890123456789", platform: "x" }),
+    ])
+
+    expect(result.ok).toBe(true)
+  })
+
+  it("rejects an explicit platform that contradicts the URL", () => {
+    const result = validateVideoRecords([
+      makeRecord({ videoUrl: "https://x.com/davido/status/1234567890123456789", platform: "youtube" }),
+    ])
+
+    expect(result.ok).toBe(false)
+    expect(result.issues.some((issue) => issue.field === "platform")).toBe(true)
+  })
+
+  it("rejects unsupported values in the platform field", () => {
+    const result = validateVideoRecords([makeRecord({ platform: "tiktok" })])
+    expect(result.ok).toBe(false)
+    expect(result.issues.some((issue) => issue.field === "platform")).toBe(true)
+  })
+
+  it("rejects t.co short links because they cannot be resolved", () => {
+    const result = validateVideoRecords([makeRecord({ videoUrl: "https://t.co/abc123" })])
+    expect(result.ok).toBe(false)
+  })
+
+  it("reports mixed-platform files", () => {
+    const result = validateVideoRecords([
+      makeRecord(),
+      makeRecord({
+        videoUrl: "https://x.com/davido/status/1234567890123456789",
+        videoTitle: "X clip",
+        platform: "x",
+      }),
+    ])
+
+    expect(result.ok).toBe(true)
+    expect(result.platforms).toEqual(["youtube", "x"])
+    expect(result.platformCounts).toEqual({ youtube: 1, x: 1 })
   })
 })
 

@@ -3,7 +3,7 @@ import { JsonVideoImportForm } from "@/components/video-import/json-video-import
 
 export const metadata: Metadata = {
   title: "Video Import Tool",
-  description: "Import video records from a JSON file into Supabase",
+  description: "Import video records from a JSON or saved HTML file into Supabase",
 }
 
 export default function VideoImportPage() {
@@ -13,7 +13,8 @@ export default function VideoImportPage() {
         <div className="container mx-auto px-4 py-6">
           <h1 className="text-3xl font-bold text-foreground text-balance">Video Import Tool</h1>
           <p className="text-muted-foreground mt-1">
-            Upload a JSON file of video records and a batch image, review the checks, and import to Supabase
+            Upload a JSON file or a saved HTML page of YouTube and X (Twitter) videos plus a batch image, review the
+            checks, and import to Supabase
           </p>
         </div>
       </header>

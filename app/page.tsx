@@ -53,7 +53,7 @@ export default function HomePage() {
           <div>
             <h1 className="text-3xl font-bold text-foreground text-balance">Video Library</h1>
             <p className="text-muted-foreground mt-1">
-              Upload your JSON file or HTML SERP results to view your video collection
+              Convert an HTML page from YouTube or X into JSON, then push only the JSON to Supabase
             </p>
           </div>
           <Button asChild>
@@ -74,7 +74,8 @@ export default function HomePage() {
               </div>
               <h2 className="text-2xl font-semibold mb-3 text-balance">Upload Your Video Data</h2>
               <p className="text-muted-foreground mb-8 text-pretty">
-                Upload a JSON file or HTML SERP results containing your YouTube video collection
+                Upload a JSON file, or an HTML page saved from YouTube or X. HTML is converted to JSON locally, and only
+                JSON is sent to Supabase.
               </p>
               <div className="flex items-center justify-center gap-3">
                 <FileUpload onUpload={handleFileUpload} />

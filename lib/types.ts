@@ -5,4 +5,5 @@ export interface VideoData {
   videoTitle: string
   actualChannelName?: string // The real channel name from YouTube API
   isUnrelatedChannel?: boolean // True if channel doesn't match expected channel
+  platform?: "youtube" | "x" // Detected from videoUrl; included in exported JSON
 }

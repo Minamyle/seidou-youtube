@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, Trash2 } from "lucide-react"
 import type { VideoData } from "@/lib/types"
-import { extractYouTubeId } from "@/lib/utils"
+import { detectVideoPlatform } from "@/lib/video-import/platforms"
 
 interface VideoCardProps {
   video: VideoData
@@ -13,7 +13,12 @@ interface VideoCardProps {
 }
 
 export function VideoCard({ video, onDelete }: VideoCardProps) {
-  const videoId = extractYouTubeId(video.videoUrl)
+  const detected = detectVideoPlatform(video.videoUrl)
+  const embedUrl = detected
+    ? detected.platform === "youtube"
+      ? `https://www.youtube.com/embed/${detected.externalId}`
+      : `https://platform.twitter.com/embed/Tweet.html?id=${detected.externalId}`
+    : null
 
   return (
     <Card
@@ -27,9 +32,9 @@ export function VideoCard({ video, onDelete }: VideoCardProps) {
       )}
 
       <div className="relative aspect-video overflow-hidden bg-muted">
-        {videoId ? (
+        {embedUrl ? (
           <iframe
-            src={`https://www.youtube.com/embed/${videoId}`}
+            src={embedUrl}
             title={video.videoTitle}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen

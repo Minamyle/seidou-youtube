@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
 import { formatBytes, type ImportValidationResult, type ValidationIssue } from "@/lib/video-import/validation"
+import { formatPlatformSummary, PLATFORM_LABELS } from "@/lib/video-import/platforms"
 
 interface ValidationPreviewProps {
   jsonFileName: string | null
@@ -17,6 +18,7 @@ interface ValidationPreviewProps {
   imagePreviewUrl: string | null
   imageIssues: ValidationIssue[]
   conflictsAcknowledged: boolean
+  sourceKind: "json" | "html"
 }
 
 function IssueList({ issues }: { issues: ValidationIssue[] }) {
@@ -51,6 +53,7 @@ export function ValidationPreview({
   imagePreviewUrl,
   imageIssues,
   conflictsAcknowledged,
+  sourceKind,
 }: ValidationPreviewProps) {
   const jsonReady = validation !== null && validation.ok && jsonIssues.every((issue) => issue.severity !== "error")
   const imageReady = imageFileName !== null && imageIssues.length === 0
@@ -79,8 +82,8 @@ export function ValidationPreview({
   if (validation) {
     summaryParts.push(
       validation.ok
-        ? `Your file contains ${validation.totalRecords} video record${validation.totalRecords === 1 ? "" : "s"}. All records passed validation.`
-        : `Your file contains ${validation.totalRecords} video record${validation.totalRecords === 1 ? "" : "s"}, but ${validation.invalidCount} of them failed validation.`,
+        ? `Your ${sourceKind === "html" ? "HTML" : "JSON"} file contains ${validation.totalRecords} video record${validation.totalRecords === 1 ? "" : "s"}. All records passed validation.`
+        : `Your ${sourceKind === "html" ? "HTML" : "JSON"} file contains ${validation.totalRecords} video record${validation.totalRecords === 1 ? "" : "s"}, but ${validation.invalidCount} of them failed validation.`,
     )
     if (validation.duplicateCount > 0) {
       summaryParts.push(`${validation.duplicateCount} duplicate record${validation.duplicateCount === 1 ? " was" : "s were"} detected and will be imported once.`)
@@ -90,6 +93,11 @@ export function ValidationPreview({
     }
     if (validation.channelNames.length > 0) {
       summaryParts.push(`Channel: ${validation.channelNames.join(", ")}.`)
+    }
+    if (validation.platforms.length > 0) {
+      summaryParts.push(
+        `Platform${validation.platforms.length === 1 ? "" : "s"}: ${formatPlatformSummary(validation.platforms, validation.platformCounts)}.`,
+      )
     }
   }
   if (imageReady) {
@@ -117,14 +125,20 @@ export function ValidationPreview({
       <CardContent className="space-y-4">
         <dl className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">JSON file</dt>
+            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {sourceKind === "html" ? "HTML file" : "JSON file"}
+            </dt>
             <dd className="mt-1 text-sm">
               {jsonFileName ? (
                 <>
                   <span className="font-medium break-all">{jsonFileName}</span>
                   {jsonFileSize !== null && <span className="text-muted-foreground"> ({formatBytes(jsonFileSize)})</span>}
                   <span className={cn("mt-1 block text-xs", jsonReady ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
-                    {jsonReady ? "Parsed and validated" : "Not valid yet"}
+                    {jsonReady
+                      ? sourceKind === "html"
+                        ? "Converted and validated"
+                        : "Parsed and validated"
+                      : "Not valid yet"}
                   </span>
                 </>
               ) : (
@@ -177,6 +191,17 @@ export function ValidationPreview({
               <dd className={cn("mt-1 text-lg font-semibold", validation.duplicateCount > 0 ? "text-amber-600 dark:text-amber-400" : "")}>{validation.duplicateCount}</dd>
             </div>
           </dl>
+        )}
+
+        {validation && validation.platforms.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Platforms</span>
+            {validation.platforms.map((platform) => (
+              <Badge key={platform} variant="secondary">
+                {PLATFORM_LABELS[platform]}: {validation.platformCounts[platform]}
+              </Badge>
+            ))}
+          </div>
         )}
 
         {needsAcknowledgment && !conflictsAcknowledged && (

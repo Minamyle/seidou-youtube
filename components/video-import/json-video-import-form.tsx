@@ -23,6 +23,9 @@ import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
 import { formatBytes, readJsonFile, validateImageFile, validateVideoRecords } from "@/lib/video-import/validation"
 import type { ImportValidationResult, ValidationIssue } from "@/lib/video-import/validation"
+import type { VideoPlatform } from "@/lib/video-import/config"
+import { parseHtmlImport, readHtmlFile } from "@/lib/video-import/html"
+import { PLATFORM_LABELS } from "@/lib/video-import/platforms"
 import { ValidationPreview } from "./validation-preview"
 
 interface ImportSuccessResult {
@@ -38,13 +41,23 @@ interface ImportSuccessResult {
   }
   category: string | null
   channelNames: string[]
+  platforms: VideoPlatform[]
   image: { path: string; signedUrl: string | null }
 }
 
+type SourceKind = "json" | "html"
+
 type JsonState =
   | { phase: "idle" }
-  | { phase: "reading"; fileName: string; fileSize: number }
-  | { phase: "selected"; fileName: string; fileSize: number; issues: ValidationIssue[]; validation: ImportValidationResult | null }
+  | { phase: "reading"; fileName: string; fileSize: number; kind: SourceKind }
+  | {
+      phase: "selected"
+      fileName: string
+      fileSize: number
+      kind: SourceKind
+      issues: ValidationIssue[]
+      validation: ImportValidationResult | null
+    }
 
 type ImportState =
   | { phase: "idle" }
@@ -98,13 +111,54 @@ export function JsonVideoImportForm() {
   const needsAcknowledgment = validation !== null && (validation.categoryConflict || validation.channelConflict)
   const canImport = jsonReady && imageReady && (!needsAcknowledgment || conflictsAcknowledged) && !importing && importState.phase !== "success"
 
-  async function handleJsonSelection(file: File | null | undefined) {
+  async function handleSourceSelection(file: File | null | undefined) {
     if (!file || importing) return
 
-    setJsonFile(file)
+    const kind: SourceKind = /\.html?$/i.test(file.name) ? "html" : "json"
+
+    setJsonFile(null)
     setConflictsAcknowledged(false)
     setImportState({ phase: "idle" })
-    setJsonState({ phase: "reading", fileName: file.name, fileSize: file.size })
+    setJsonState({ phase: "reading", fileName: file.name, fileSize: file.size, kind })
+
+    if (kind === "html") {
+      const readResult = await readHtmlFile(file)
+
+      if (!readResult.ok) {
+        setJsonState({
+          phase: "selected",
+          fileName: file.name,
+          fileSize: file.size,
+          kind,
+          issues: readResult.issues,
+          validation: null,
+        })
+        return
+      }
+
+      const parsed = parseHtmlImport(readResult.text, file.name)
+      const result = validateVideoRecords(parsed.records)
+      const issues = [...readResult.issues, ...parsed.issues]
+
+      if (parsed.records.length > 0) {
+        const syntheticName = `${file.name.replace(/\.html?$/i, "")}.json`
+        setJsonFile(
+          new File([JSON.stringify(parsed.records)], syntheticName, {
+            type: "application/json",
+          }),
+        )
+      }
+
+      setJsonState({
+        phase: "selected",
+        fileName: file.name,
+        fileSize: file.size,
+        kind,
+        issues,
+        validation: result,
+      })
+      return
+    }
 
     const readResult = await readJsonFile(file)
 
@@ -113,6 +167,7 @@ export function JsonVideoImportForm() {
         phase: "selected",
         fileName: file.name,
         fileSize: file.size,
+        kind,
         issues: readResult.issues,
         validation: null,
       })
@@ -127,6 +182,7 @@ export function JsonVideoImportForm() {
         phase: "selected",
         fileName: file.name,
         fileSize: file.size,
+        kind,
         issues: [{ severity: "error", message: "The file is not valid JSON." }],
         validation: null,
       })
@@ -134,10 +190,12 @@ export function JsonVideoImportForm() {
     }
 
     const result = validateVideoRecords(parsed)
+    setJsonFile(file)
     setJsonState({
       phase: "selected",
       fileName: file.name,
       fileSize: file.size,
+      kind,
       issues: readResult.issues,
       validation: result,
     })
@@ -164,9 +222,11 @@ export function JsonVideoImportForm() {
     submittingRef.current = true
     setImportState({ phase: "importing" })
 
+    const sourceFilename = jsonState.phase === "selected" ? jsonState.fileName : jsonFile.name
     const formData = new FormData()
     formData.append("jsonFile", jsonFile)
     formData.append("image", imageState.file)
+    formData.append("sourceFilename", sourceFilename)
     formData.append("conflictsAcknowledged", String(conflictsAcknowledged))
 
     try {
@@ -222,7 +282,7 @@ export function JsonVideoImportForm() {
     setDragOver((prev) => ({ ...prev, [kind]: false }))
     const file = event.dataTransfer.files?.[0] ?? null
     if (kind === "json") {
-      void handleJsonSelection(file)
+      void handleSourceSelection(file)
     } else {
       void handleImageSelection(file)
     }
@@ -239,7 +299,7 @@ export function JsonVideoImportForm() {
           <CardDescription>
             Pick a JSON file of video records and one image for the batch. Everything is checked before anything is
             imported. Your JSON file is the source of truth - category and channel names are read from it and cannot be
-            edited here.
+            edited here. YouTube and X (Twitter) video links are both supported.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-8">
@@ -288,7 +348,11 @@ export function JsonVideoImportForm() {
           </div>
 
           <div className="space-y-2">
-            <Label id="json-file-label">JSON File</Label>
+            <Label id="json-file-label">Video Data File</Label>
+            <p className="text-xs text-muted-foreground">
+              Use a JSON file, or an HTML page saved from X / a video results page. HTML is converted to JSON in your
+              browser, then validated again on the server.
+            </p>
             <div
               onDragOver={(event) => {
                 event.preventDefault()
@@ -304,11 +368,11 @@ export function JsonVideoImportForm() {
                 ref={jsonInputRef}
                 id="json-file-input"
                 type="file"
-                accept=".json,application/json"
+                accept=".json,.html,.htm,application/json,text/html"
                 className="sr-only"
                 disabled={importing}
                 onChange={(event) => {
-                  void handleJsonSelection(event.target.files?.[0] ?? null)
+                  void handleSourceSelection(event.target.files?.[0] ?? null)
                   event.target.value = ""
                 }}
               />
@@ -317,12 +381,12 @@ export function JsonVideoImportForm() {
                 <div className="flex flex-col items-center gap-3 py-4 text-center">
                   <FileJson className="h-8 w-8 text-muted-foreground" />
                   <div className="text-sm text-muted-foreground">
-                    Drag a .json file here, or choose one below.
+                    Drag a .json, .html, or .htm file here, or choose one below.
                   </div>
                   <Button asChild variant="outline" disabled={importing}>
                     <label htmlFor="json-file-input" className="cursor-pointer">
                       <Upload className="mr-2 h-4 w-4" />
-                      Choose JSON File
+                      Choose File
                     </label>
                   </Button>
                 </div>
@@ -348,6 +412,9 @@ export function JsonVideoImportForm() {
                       <p className="truncate text-sm font-medium">{jsonState.fileName}</p>
                       <p className="text-xs text-muted-foreground">{formatBytes(jsonState.fileSize)}</p>
                     </div>
+                    <Badge variant="outline" className="ml-1 shrink-0">
+                      {jsonState.kind === "html" ? "HTML" : "JSON"}
+                    </Badge>
                     <Badge variant={jsonReady ? "default" : "destructive"} className="ml-1 shrink-0">
                       {jsonReady ? "Valid" : "Invalid"}
                     </Badge>
@@ -507,8 +574,17 @@ export function JsonVideoImportForm() {
           )}
 
           <ValidationPreview
-            jsonFileName={jsonFile?.name ?? null}
-            jsonFileSize={jsonFile?.size ?? null}
+            jsonFileName={
+              jsonState.phase === "reading" || jsonState.phase === "selected"
+                ? jsonState.fileName
+                : jsonFile?.name ?? null
+            }
+            jsonFileSize={
+              jsonState.phase === "reading" || jsonState.phase === "selected"
+                ? jsonState.fileSize
+                : jsonFile?.size ?? null
+            }
+            sourceKind={jsonState.phase === "selected" ? jsonState.kind : "json"}
             jsonIssues={fileIssues}
             validation={validation}
             imageFileName={imageState.file?.name ?? null}
@@ -571,6 +647,11 @@ export function JsonVideoImportForm() {
                       The batch image was saved to Supabase Storage for this import batch.
                     </p>
                   </div>
+                )}
+                {importState.result.platforms.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Platforms: {importState.result.platforms.map((platform) => PLATFORM_LABELS[platform]).join(", ")}
+                  </p>
                 )}
                 <p className="text-xs text-muted-foreground">Batch reference: {importState.result.batchId}</p>
                 <Button type="button" variant="outline" size="sm" onClick={resetForm}>

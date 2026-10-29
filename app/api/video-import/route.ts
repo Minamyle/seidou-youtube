@@ -15,6 +15,7 @@ import {
   getExtension,
   type ValidationIssue,
 } from "@/lib/video-import/validation"
+import type { VideoPlatform } from "@/lib/video-import/config"
 
 export const runtime = "nodejs"
 
@@ -31,6 +32,7 @@ interface ImportSuccessResponse {
   }
   category: string | null
   channelNames: string[]
+  platforms: VideoPlatform[]
   image: { path: string; signedUrl: string | null }
 }
 
@@ -46,6 +48,23 @@ function fail(
 function sanitizeFileName(name: string): string {
   const cleaned = name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80)
   return cleaned || "batch-image"
+}
+
+/**
+ * The browser may send the original .html filename alongside the synthesized
+ * JSON payload, so the batch record shows what the user actually uploaded.
+ */
+function sanitizeSourceFilename(value: FormDataEntryValue | null, fallback: string): string {
+  if (typeof value !== "string") return fallback
+
+  const cleaned = value
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[\\/]+/g, "_")
+    .trim()
+    .slice(0, 200)
+
+  return cleaned || fallback
 }
 
 export async function POST(request: NextRequest) {
@@ -64,6 +83,7 @@ export async function POST(request: NextRequest) {
   const jsonFile = form.get("jsonFile")
   const imageFile = form.get("image")
   const acknowledged = form.get("conflictsAcknowledged") === "true"
+  const sourceFilenameField = form.get("sourceFilename")
 
   if (!(jsonFile instanceof File)) {
     return fail(400, "missing_json", "No JSON file was uploaded. Choose a JSON file and try again.")
@@ -147,12 +167,14 @@ export async function POST(request: NextRequest) {
   const extension = getExtension(imageFile.name)
   const imageContentType = imageFile.type
   const imagePath = `${batchId}/${sanitizeFileName(imageFile.name)}${extension && !imageFile.name.toLowerCase().endsWith(extension) ? extension : ""}`
+  const sourceFilename = sanitizeSourceFilename(sourceFilenameField, jsonFile.name)
 
   const { error: batchError } = await supabase.from("video_import_batches").insert({
     id: batchId,
-    source_filename: jsonFile.name,
+    source_filename: sourceFilename,
     category: validation.category,
     channel_names: validation.channelNames,
+    platforms: validation.platforms,
     status: "pending",
     records_processed: validation.records.length,
   })
@@ -182,7 +204,8 @@ export async function POST(request: NextRequest) {
 
   const records = validation.records.map((record) => ({
     video_url: record.videoUrl,
-    youtube_id: record.youtubeId,
+    platform: record.platform,
+    external_id: record.externalId,
     video_title: record.videoTitle,
     category: record.category,
     channel_name: record.channelName,
@@ -225,6 +248,7 @@ export async function POST(request: NextRequest) {
     counts,
     category: validation.category,
     channelNames: validation.channelNames,
+    platforms: validation.platforms,
     image: { path: imagePath, signedUrl },
   }
 

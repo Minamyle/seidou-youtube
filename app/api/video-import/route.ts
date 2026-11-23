@@ -16,6 +16,7 @@ import {
   type ValidationIssue,
 } from "@/lib/video-import/validation"
 import type { VideoPlatform } from "@/lib/video-import/config"
+import { isProductBatch } from "@/lib/video-import/platforms"
 
 export const runtime = "nodejs"
 
@@ -33,7 +34,8 @@ interface ImportSuccessResponse {
   category: string | null
   channelNames: string[]
   platforms: VideoPlatform[]
-  image: { path: string; signedUrl: string | null }
+  /** Null for product-picture batches imported without a batch image. */
+  image: { path: string; signedUrl: string | null } | null
 }
 
 function fail(
@@ -89,10 +91,6 @@ export async function POST(request: NextRequest) {
     return fail(400, "missing_json", "No JSON file was uploaded. Choose a JSON file and try again.")
   }
 
-  if (!(imageFile instanceof File)) {
-    return fail(400, "missing_image", "No batch image was uploaded. Choose one image and try again.")
-  }
-
   const readResult = await readJsonFile(jsonFile)
   if (!readResult.ok) {
     return fail(422, "invalid_json_file", "The JSON file could not be accepted.", readResult.issues)
@@ -138,19 +136,29 @@ export async function POST(request: NextRequest) {
     return fail(422, "validation_failed", "No importable records were found in the JSON file.", validation.issues)
   }
 
-  const imageValidation = await validateImageFile(imageFile)
-  if (!imageValidation.ok) {
-    return fail(422, "invalid_image", "The batch image was not accepted.", imageValidation.issues)
+  // ASOS, Temu and SHEIN products each carry their own picture, so a batch made
+  // only of them does not need a batch image. Any other batch still does.
+  const image = imageFile instanceof File && imageFile.size > 0 ? imageFile : null
+
+  if (!image && !isProductBatch(validation.platforms)) {
+    return fail(400, "missing_image", "No batch image was uploaded. Choose one image and try again.")
   }
 
-  if (imageFile.size > IMAGE_FILE_MAX_BYTES) {
-    return fail(413, "invalid_image", "The batch image is too large.", [
-      { severity: "error", message: "Choose an image smaller than the configured size limit." },
-    ])
-  }
+  if (image) {
+    const imageValidation = await validateImageFile(image)
+    if (!imageValidation.ok) {
+      return fail(422, "invalid_image", "The batch image was not accepted.", imageValidation.issues)
+    }
 
-  if (!IMAGE_MIME_TYPES.includes(imageFile.type as (typeof IMAGE_MIME_TYPES)[number])) {
-    return fail(415, "invalid_image", "The batch image type is not supported. Use JPEG, PNG, or WebP.")
+    if (image.size > IMAGE_FILE_MAX_BYTES) {
+      return fail(413, "invalid_image", "The batch image is too large.", [
+        { severity: "error", message: "Choose an image smaller than the configured size limit." },
+      ])
+    }
+
+    if (!IMAGE_MIME_TYPES.includes(image.type as (typeof IMAGE_MIME_TYPES)[number])) {
+      return fail(415, "invalid_image", "The batch image type is not supported. Use JPEG, PNG, or WebP.")
+    }
   }
 
   let supabase
@@ -164,9 +172,12 @@ export async function POST(request: NextRequest) {
   }
 
   const batchId = randomUUID()
-  const extension = getExtension(imageFile.name)
-  const imageContentType = imageFile.type
-  const imagePath = `${batchId}/${sanitizeFileName(imageFile.name)}${extension && !imageFile.name.toLowerCase().endsWith(extension) ? extension : ""}`
+  let imagePath: string | null = null
+  if (image) {
+    const extension = getExtension(image.name)
+    const suffix = extension && !image.name.toLowerCase().endsWith(extension) ? extension : ""
+    imagePath = `${batchId}/${sanitizeFileName(image.name)}${suffix}`
+  }
   const sourceFilename = sanitizeSourceFilename(sourceFilenameField, jsonFile.name)
 
   const { error: batchError } = await supabase.from("video_import_batches").insert({
@@ -184,24 +195,28 @@ export async function POST(request: NextRequest) {
     return fail(500, "database_error", "The import could not be started because of a database error. Nothing was imported. Try again.")
   }
 
-  let imageBytes: ArrayBuffer
-  try {
-    imageBytes = await imageFile.arrayBuffer()
-  } catch {
-    await markBatchFailed(supabase, batchId, "The batch image could not be read.")
-    return fail(500, "image_upload_failed", "The batch image could not be read. Nothing was imported. Try again.")
+  if (image && imagePath) {
+    let imageBytes: ArrayBuffer
+    try {
+      imageBytes = await image.arrayBuffer()
+    } catch {
+      await markBatchFailed(supabase, batchId, "The batch image could not be read.")
+      return fail(500, "image_upload_failed", "The batch image could not be read. Nothing was imported. Try again.")
+    }
+
+    const { error: uploadError } = await supabase.storage
+      .from(BATCH_IMAGE_BUCKET)
+      .upload(imagePath, imageBytes, { contentType: image.type, upsert: false })
+
+    if (uploadError) {
+      console.error("[video-import] storage upload failed:", JSON.stringify({ message: uploadError.message, name: (uploadError as any).name }))
+      await markBatchFailed(supabase, batchId, "The batch image could not be uploaded.")
+      return fail(502, "image_upload_failed", "The batch image could not be uploaded to storage. Nothing was imported. Check your connection and try again.")
+    }
   }
 
-  const { error: uploadError } = await supabase.storage
-    .from(BATCH_IMAGE_BUCKET)
-    .upload(imagePath, imageBytes, { contentType: imageContentType, upsert: false })
-
-  if (uploadError) {
-    console.error("[video-import] storage upload failed:", JSON.stringify({ message: uploadError.message, name: (uploadError as any).name }))
-    await markBatchFailed(supabase, batchId, "The batch image could not be uploaded.")
-    return fail(502, "image_upload_failed", "The batch image could not be uploaded to storage. Nothing was imported. Check your connection and try again.")
-  }
-
+  // import_video_batch stores YouTube/X rows in catalogue_videos and
+  // ASOS/Temu/SHEIN rows in catalogue_products (see the 20261123 migration).
   const records = validation.records.map((record) => ({
     video_url: record.videoUrl,
     platform: record.platform,
@@ -211,6 +226,7 @@ export async function POST(request: NextRequest) {
     channel_name: record.channelName,
     actual_channel_name: record.actualChannelName,
     is_unrelated_channel: record.isUnrelatedChannel,
+    image_url: record.imageUrl,
   }))
 
   const { data: rpcData, error: rpcError } = await supabase.rpc("import_video_batch", {
@@ -219,7 +235,7 @@ export async function POST(request: NextRequest) {
   })
 
   if (rpcError) {
-    await supabase.storage.from(BATCH_IMAGE_BUCKET).remove([imagePath])
+    if (imagePath) await supabase.storage.from(BATCH_IMAGE_BUCKET).remove([imagePath])
     await markBatchFailed(supabase, batchId, "The video records could not be imported.")
     console.error("[video-import] rpc import_video_batch failed:", rpcError.code, rpcError.message, rpcError.details)
     return fail(500, "database_error", "The video records could not be imported. The import was rolled back and nothing was added to the catalogue. Try again.")
@@ -234,11 +250,13 @@ export async function POST(request: NextRequest) {
   }
 
   let signedUrl: string | null = null
-  try {
-    const { data } = await supabase.storage.from(BATCH_IMAGE_BUCKET).createSignedUrl(imagePath, SIGNED_URL_TTL_SECONDS)
-    signedUrl = data?.signedUrl ?? null
-  } catch {
-    signedUrl = null
+  if (imagePath) {
+    try {
+      const { data } = await supabase.storage.from(BATCH_IMAGE_BUCKET).createSignedUrl(imagePath, SIGNED_URL_TTL_SECONDS)
+      signedUrl = data?.signedUrl ?? null
+    } catch {
+      signedUrl = null
+    }
   }
 
   const response: ImportSuccessResponse = {
@@ -249,7 +267,7 @@ export async function POST(request: NextRequest) {
     category: validation.category,
     channelNames: validation.channelNames,
     platforms: validation.platforms,
-    image: { path: imagePath, signedUrl },
+    image: imagePath ? { path: imagePath, signedUrl } : null,
   }
 
   return NextResponse.json(response)

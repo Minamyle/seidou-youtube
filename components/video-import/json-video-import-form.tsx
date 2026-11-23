@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Trash2,
   Upload,
+  PackageSearch,
 } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -21,11 +22,18 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
-import { formatBytes, readJsonFile, validateImageFile, validateVideoRecords } from "@/lib/video-import/validation"
+import Link from "next/link"
+import {
+  formatBytes,
+  PRODUCT_FILE_MESSAGE,
+  readJsonFile,
+  validateImageFile,
+  validateVideoRecords,
+} from "@/lib/video-import/validation"
 import type { ImportValidationResult, ValidationIssue } from "@/lib/video-import/validation"
 import type { VideoPlatform } from "@/lib/video-import/config"
 import { parseHtmlImport, readHtmlFile } from "@/lib/video-import/html"
-import { PLATFORM_LABELS } from "@/lib/video-import/platforms"
+import { isProductBatch, PLATFORM_LABELS } from "@/lib/video-import/platforms"
 import { ValidationPreview } from "./validation-preview"
 
 interface ImportSuccessResult {
@@ -42,7 +50,7 @@ interface ImportSuccessResult {
   category: string | null
   channelNames: string[]
   platforms: VideoPlatform[]
-  image: { path: string; signedUrl: string | null }
+  image: { path: string; signedUrl: string | null } | null
 }
 
 type SourceKind = "json" | "html"
@@ -107,7 +115,12 @@ export function JsonVideoImportForm() {
     validation.ok &&
     fileIssues.every((issue) => issue.severity !== "error")
 
-  const imageReady = imageState.file !== null && imageState.issues.length === 0
+  // A batch of only ASOS/Temu/SHEIN products does not need a batch image:
+  // every product already carries its own picture. An image chosen anyway is
+  // still checked and uploaded.
+  const productBatch = validation !== null && isProductBatch(validation.platforms)
+  const recordNoun = productBatch ? "product" : "video"
+  const imageReady = imageState.file === null ? productBatch : imageState.issues.length === 0
   const needsAcknowledgment = validation !== null && (validation.categoryConflict || validation.channelConflict)
   const canImport = jsonReady && imageReady && (!needsAcknowledgment || conflictsAcknowledged) && !importing && importState.phase !== "success"
 
@@ -217,7 +230,7 @@ export function JsonVideoImportForm() {
   }
 
   async function handleImport() {
-    if (submittingRef.current || !canImport || !jsonFile || !imageState.file) return
+    if (submittingRef.current || !canImport || !jsonFile) return
 
     submittingRef.current = true
     setImportState({ phase: "importing" })
@@ -225,7 +238,7 @@ export function JsonVideoImportForm() {
     const sourceFilename = jsonState.phase === "selected" ? jsonState.fileName : jsonFile.name
     const formData = new FormData()
     formData.append("jsonFile", jsonFile)
-    formData.append("image", imageState.file)
+    if (imageState.file) formData.append("image", imageState.file)
     formData.append("sourceFilename", sourceFilename)
     formData.append("conflictsAcknowledged", String(conflictsAcknowledged))
 
@@ -251,7 +264,7 @@ export function JsonVideoImportForm() {
       setImportState({ phase: "success", result })
       toast({
         title: "Import complete",
-        description: `${result.counts.inserted} video${result.counts.inserted === 1 ? "" : "s"} added, ${result.counts.skippedExisting} already in the catalogue.`,
+        description: `${result.counts.inserted} ${recordNoun}${result.counts.inserted === 1 ? "" : "s"} added, ${result.counts.skippedExisting} already in the catalogue.`,
       })
     } catch {
       const message =
@@ -295,11 +308,14 @@ export function JsonVideoImportForm() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">JSON Video Import Form</CardTitle>
+          <CardTitle className="text-base">JSON {productBatch ? "Product" : "Video"} Import Form</CardTitle>
           <CardDescription>
-            Pick a JSON file of video records and one image for the batch. Everything is checked before anything is
-            imported. Your JSON file is the source of truth - category and channel names are read from it and cannot be
-            edited here. YouTube and X (Twitter) video links are both supported.
+            {productBatch
+              ? "Pick a JSON file of product records. Each product already has its own picture, so a batch image is optional."
+              : "Pick a JSON file of video records and one image for the batch."}{" "}
+            Everything is checked before anything is imported. Your JSON file is the source of truth - category and channel names are read from it and cannot be
+            edited here. YouTube, X (Twitter), ASOS, Temu and SHEIN links are supported. ASOS, Temu and SHEIN records
+            are product pictures: videoUrl is the product page link and imageUrl is the picture.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-8">
@@ -340,7 +356,7 @@ export function JsonVideoImportForm() {
               {validation?.channelConflict && (
                 <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  The file lists {validation.channelNames.length} channel names: {channels}. Each video keeps its own
+                  The file lists {validation.channelNames.length} channel names: {channels}. Each {recordNoun} keeps its own
                   channel name from the file. Confirm the batch below.
                 </p>
               )}
@@ -348,10 +364,10 @@ export function JsonVideoImportForm() {
           </div>
 
           <div className="space-y-2">
-            <Label id="json-file-label">Video Data File</Label>
+            <Label id="json-file-label">{productBatch ? "Product" : "Video"} Data File</Label>
             <p className="text-xs text-muted-foreground">
-              Use a JSON file, or an HTML page saved from X / a video results page. HTML is converted to JSON in your
-              browser, then validated again on the server.
+              Use a JSON file, or an HTML page saved from YouTube, X, ASOS, Temu or SHEIN. HTML is converted to JSON in
+              your browser, then validated again on the server.
             </p>
             <div
               onDragOver={(event) => {
@@ -446,10 +462,30 @@ export function JsonVideoImportForm() {
                 </div>
               )}
             </div>
+            {validation?.issues.some((issue) => issue.message === PRODUCT_FILE_MESSAGE) && (
+              <Alert>
+                <PackageSearch className="h-4 w-4" />
+                <AlertTitle>This is a products file</AlertTitle>
+                <AlertDescription className="space-y-3">
+                  <p>
+                    Files from the Product Collector are imported on the Product Import page, in the
+                    &quot;Import a JSON file&quot; tab.
+                  </p>
+                  <Button asChild size="sm">
+                    <Link href="/products">Go to Product Import</Link>
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
 
           <div className="space-y-2">
-            <Label id="image-file-label">Batch Image</Label>
+            <Label id="image-file-label">Batch Image{productBatch && " (optional)"}</Label>
+            {productBatch && (
+              <p className="text-xs text-muted-foreground">
+                Not needed for ASOS, Temu and SHEIN products - each product already has its own picture.
+              </p>
+            )}
             <div
               onDragOver={(event) => {
                 event.preventDefault()
@@ -566,7 +602,7 @@ export function JsonVideoImportForm() {
                   )}
                   {validation?.channelConflict && <>Channels in this file: {channels}. </>
                   }
-                  Each video keeps its own category and channel exactly as written in the JSON file. Nothing is
+                  Each {recordNoun} keeps its own category and channel exactly as written in the JSON file. Nothing is
                   overwritten or renamed.
                 </p>
               </div>
@@ -590,6 +626,8 @@ export function JsonVideoImportForm() {
             imageFileName={imageState.file?.name ?? null}
             imagePreviewUrl={imageState.previewUrl}
             imageIssues={imageState.issues}
+            imageOptional={productBatch}
+            recordNoun={recordNoun}
             conflictsAcknowledged={conflictsAcknowledged}
           />
 
@@ -608,7 +646,8 @@ export function JsonVideoImportForm() {
               )}
             </Button>
             <p aria-live="polite" className="text-sm text-muted-foreground">
-              {importing && "Uploading the image and saving the video records. This can take a moment - please keep this page open."}
+              {importing &&
+                `${imageState.file ? "Uploading the image and saving" : "Saving"} the ${recordNoun} records. This can take a moment - please keep this page open.`}
               {!importing && importState.phase === "idle" && "The import starts only after every check passes."}
             </p>
           </div>
@@ -636,7 +675,7 @@ export function JsonVideoImportForm() {
                     <p className="text-lg font-semibold">{importState.result.counts.failed}</p>
                   </div>
                 </div>
-                {importState.result.image.signedUrl && (
+                {importState.result.image?.signedUrl && (
                   <div className="flex items-center gap-3">
                     <img
                       src={importState.result.image.signedUrl}

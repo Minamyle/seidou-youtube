@@ -96,13 +96,14 @@ export function FileUpload({ onUpload }: FileUploadProps) {
           actualChannelName,
           isUnrelatedChannel,
           platform: detected.platform,
+          ...(typeof item.imageUrl === "string" && item.imageUrl ? { imageUrl: item.imageUrl } : {}),
         })
       }
 
       if (validatedVideos.length === 0) {
         toast({
           title: "No valid videos found",
-          description: "The JSON file does not contain valid YouTube or X video links",
+          description: "The JSON file does not contain valid YouTube, X, ASOS, Temu or SHEIN links",
           variant: "destructive",
         })
         setIsLoading(false)

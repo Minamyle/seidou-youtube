@@ -1,5 +1,7 @@
 import { HTML_FILE_MAX_BYTES, type VideoPlatform } from "./config"
-import { detectVideoPlatform } from "./platforms"
+import { decodeHtmlEntities, safeDecode, stripHtml, truncate } from "./html-utils"
+import { detectVideoPlatform, emptyPlatformCounts, PLATFORM_LABELS } from "./platforms"
+import { detectRetailPage, extractRetailRecords } from "./retail"
 import type { ValidationIssue } from "./validation"
 
 export interface HtmlVideoRecord {
@@ -10,12 +12,15 @@ export interface HtmlVideoRecord {
   platform: VideoPlatform
   actualChannelName: string | null
   isUnrelatedChannel: boolean
+  /** ASOS/Temu/SHEIN only: the product picture shown in the feed. */
+  imageUrl?: string
 }
 
 export interface HtmlImportResult {
   ok: boolean
   records: HtmlVideoRecord[]
   issues: ValidationIssue[]
+  counts: Record<VideoPlatform, number>
   xCount: number
   youtubeCount: number
 }
@@ -31,15 +36,6 @@ const X_RELATIVE_STATUS_PATTERN = /^\/(?:i\/web\/|([^/?#"'<>]+)\/)?status(?:es)?
 
 const VIDEO_MARKER_PATTERN =
   /data-testid="videoPlayer"|<video\b|data-testid="videoComponent"|aria-label="Play/i
-
-const HTML_ENTITY_MAP: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-}
 
 const YOUTUBE_HOSTS = new Set([
   "youtube.com",
@@ -77,7 +73,12 @@ export async function readHtmlFile(file: File | null | undefined): Promise<HtmlR
   if (!file) {
     return {
       ok: false,
-      issues: [{ severity: "error", message: "No HTML file selected. Choose an .html file saved from X or a video page." }],
+      issues: [
+        {
+          severity: "error",
+          message: "No HTML file selected. Choose an .html file saved from YouTube, X, ASOS, Temu or SHEIN.",
+        },
+      ],
     }
   }
 
@@ -124,6 +125,22 @@ export async function readHtmlFile(file: File | null | undefined): Promise<HtmlR
 export function parseHtmlImport(html: string, fileName: string): HtmlImportResult {
   const issues: ValidationIssue[] = []
 
+  // Retail pages are checked first and parsed on their own, so social links in
+  // a shop's footer (YouTube, X) are never imported as videos.
+  const retailPlatform = detectRetailPage(html)
+  if (retailPlatform) {
+    const records = extractRetailRecords(html, retailPlatform, parseFileName(fileName), issues)
+
+    if (records.length === 0) {
+      issues.push({
+        severity: "error",
+        message: `This page is from ${PLATFORM_LABELS[retailPlatform]}, but no products were found in it. Open a product page (or scroll a listing until products load), then save it again as HTML.`,
+      })
+    }
+
+    return buildResult(records, issues)
+  }
+
   const xPage = looksLikeXPage(html)
   const xRecords = extractXRecords(html, fileName, issues)
   const youtubeRecords = xPage ? [] : extractYouTubeRecords(html, fileName)
@@ -140,17 +157,25 @@ export function parseHtmlImport(html: string, fileName: string): HtmlImportResul
         : {
             severity: "error",
             message:
-              "No YouTube or X (Twitter) video links were found in this HTML file. Open the page, scroll until the videos are loaded, then save it again as HTML.",
+              "No YouTube, X (Twitter), ASOS, Temu or SHEIN videos were found in this HTML file. Open the page, scroll until the videos are loaded, then save it again as HTML.",
           },
     )
   }
+
+  return buildResult(records, issues)
+}
+
+function buildResult(records: HtmlVideoRecord[], issues: ValidationIssue[]): HtmlImportResult {
+  const counts = emptyPlatformCounts()
+  for (const record of records) counts[record.platform] += 1
 
   return {
     ok: records.length > 0,
     records,
     issues,
-    xCount: xRecords.length,
-    youtubeCount: youtubeRecords.length,
+    counts,
+    xCount: counts.x,
+    youtubeCount: counts.youtube,
   }
 }
 
@@ -472,9 +497,9 @@ function extractDivByTestId(html: string, testId: string): string | null {
 function cleanChannelName(value: string): string {
   let channel = value.trim()
 
-  channel = channel.replace(/\s*[_|/-]\s*(?:x|twitter)\s*$/i, "")
-  channel = channel.replace(/\s*\((?:x|twitter)\)\s*$/i, "")
-  channel = channel.replace(/\s*[-–—]\s*(?:x|twitter)\s*$/i, "")
+  channel = channel.replace(/\s*[_|/-]\s*(?:x|twitter|asos|temu|shein)\s*$/i, "")
+  channel = channel.replace(/\s*\((?:x|twitter|asos|temu|shein)\)\s*$/i, "")
+  channel = channel.replace(/\s*[-–—]\s*(?:x|twitter|asos|temu|shein)\s*$/i, "")
 
   if (/^\(.*\)$/.test(channel)) {
     channel = channel.slice(1, -1)
@@ -502,34 +527,6 @@ function cleanYouTubeTitle(value: string): string {
   cleaned = cleaned.replace(/^\d{1,2}[.)]\s+/, "").trim()
 
   return cleaned
-}
-
-function stripHtml(value: string): string {
-  return decodeHtmlEntities(value.replace(/<[^>]*>/g, " "))
-}
-
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (full, entity: string) => {
-    if (entity.startsWith("#")) {
-      const isHex = entity[1]?.toLowerCase() === "x"
-      const code = Number.parseInt(isHex ? entity.slice(2) : entity.slice(1), isHex ? 16 : 10)
-      return Number.isFinite(code) ? String.fromCodePoint(code) : full
-    }
-
-    return HTML_ENTITY_MAP[entity.toLowerCase()] ?? full
-  })
-}
-
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
-function truncate(value: string, max = 200): string {
-  return value.length > max ? `${value.slice(0, max - 1).trimEnd()}…` : value
 }
 
 function escapeRegExp(value: string): string {

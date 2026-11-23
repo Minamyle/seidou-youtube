@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useState } from "react"
-import { Upload, Trash2, AlertTriangle, DatabaseZap } from "lucide-react"
+import { Upload, Trash2, AlertTriangle, DatabaseZap, PackageSearch } from "lucide-react"
 import { FileUpload } from "@/components/file-upload"
 import { HtmlUpload } from "@/components/html-upload"
 import { VideoGrid } from "@/components/video-grid"
@@ -53,15 +53,23 @@ export default function HomePage() {
           <div>
             <h1 className="text-3xl font-bold text-foreground text-balance">Video Library</h1>
             <p className="text-muted-foreground mt-1">
-              Convert an HTML page from YouTube or X into JSON, then push only the JSON to Supabase
+              Convert an HTML page from YouTube, X, ASOS, Temu or SHEIN into JSON, then push only the JSON to Supabase
             </p>
           </div>
-          <Button asChild>
-            <Link href="/import">
-              <DatabaseZap className="w-4 h-4 mr-2" />
-              JSON Video Import Form
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <Link href="/products">
+                <PackageSearch className="w-4 h-4 mr-2" />
+                Product Collector
+              </Link>
+            </Button>
+            <Button asChild>
+              <Link href="/import">
+                <DatabaseZap className="w-4 h-4 mr-2" />
+                JSON Video Import Form
+              </Link>
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -74,8 +82,8 @@ export default function HomePage() {
               </div>
               <h2 className="text-2xl font-semibold mb-3 text-balance">Upload Your Video Data</h2>
               <p className="text-muted-foreground mb-8 text-pretty">
-                Upload a JSON file, or an HTML page saved from YouTube or X. HTML is converted to JSON locally, and only
-                JSON is sent to Supabase.
+                Upload a JSON file, or an HTML page saved from YouTube, X, ASOS, Temu or SHEIN. HTML is converted to JSON
+                locally, and only JSON is sent to Supabase.
               </p>
               <div className="flex items-center justify-center gap-3">
                 <FileUpload onUpload={handleFileUpload} />

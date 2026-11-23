@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button"
 import type { VideoData } from "@/lib/types"
 import { useToast } from "@/hooks/use-toast"
 import { extractYouTubeId } from "@/lib/utils"
+import { SUPPORTED_PLATFORMS } from "@/lib/video-import/config"
 import { parseHtmlImport, readHtmlFile, type HtmlVideoRecord } from "@/lib/video-import/html"
+import { isRetailPlatform, PLATFORM_LABELS } from "@/lib/video-import/platforms"
 
 interface HtmlUploadProps {
   onUpload: (data: VideoData[]) => void
@@ -27,6 +29,7 @@ export function HtmlUpload({ onUpload }: HtmlUploadProps) {
     actualChannelName: record.actualChannelName ?? undefined,
     isUnrelatedChannel: record.isUnrelatedChannel,
     platform: record.platform,
+    ...(record.imageUrl ? { imageUrl: record.imageUrl } : {}),
   })
 
   const enrichYouTubeRecord = async (record: HtmlVideoRecord): Promise<{ video: VideoData; unrelated: boolean; fallback: boolean }> => {
@@ -79,7 +82,8 @@ export function HtmlUpload({ onUpload }: HtmlUploadProps) {
       if (!readResult.ok) {
         toast({
           title: "HTML file could not be read",
-          description: readResult.issues[0]?.message ?? "Choose an .html file saved from X or a YouTube results page.",
+          description:
+            readResult.issues[0]?.message ?? "Choose an .html file saved from YouTube, X, ASOS, Temu or SHEIN.",
           variant: "destructive",
         })
         return
@@ -95,7 +99,7 @@ export function HtmlUpload({ onUpload }: HtmlUploadProps) {
           title: "No video links found",
           description:
             errors[0]?.message ??
-            "No YouTube or X video links were found. Open the page, scroll until the videos load, then save it again as HTML.",
+            "No YouTube, X, ASOS, Temu or SHEIN videos were found. Open the page, scroll until the videos load, then save it again as HTML.",
           variant: "destructive",
         })
         return
@@ -124,10 +128,11 @@ export function HtmlUpload({ onUpload }: HtmlUploadProps) {
 
       onUpload(processedVideos)
 
-      const parts = [
-        `${parsed.youtubeCount} YouTube video${parsed.youtubeCount === 1 ? "" : "s"}`,
-        `${parsed.xCount} X post${parsed.xCount === 1 ? "" : "s"}`,
-      ]
+      const parts = SUPPORTED_PLATFORMS.filter((platform) => parsed.counts[platform] > 0).map((platform) => {
+        const count = parsed.counts[platform]
+        const noun = platform === "x" ? "post" : isRetailPlatform(platform) ? "product" : "video"
+        return `${count} ${PLATFORM_LABELS[platform]} ${noun}${count === 1 ? "" : "s"}`
+      })
       const notes = [
         unrelatedCount > 0 ? `${unrelatedCount} tagged as unrelated` : "",
         fallbackCount > 0 ? `${fallbackCount} kept the title from the HTML` : "",

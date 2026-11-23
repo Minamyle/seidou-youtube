@@ -17,6 +17,10 @@ interface ValidationPreviewProps {
   imageFileName: string | null
   imagePreviewUrl: string | null
   imageIssues: ValidationIssue[]
+  /** True for ASOS/Temu/SHEIN-only batches, which do not need a batch image. */
+  imageOptional: boolean
+  /** "video" or "product", used in the summary text. */
+  recordNoun: string
   conflictsAcknowledged: boolean
   sourceKind: "json" | "html"
 }
@@ -52,11 +56,13 @@ export function ValidationPreview({
   imageFileName,
   imagePreviewUrl,
   imageIssues,
+  imageOptional,
+  recordNoun,
   conflictsAcknowledged,
   sourceKind,
 }: ValidationPreviewProps) {
   const jsonReady = validation !== null && validation.ok && jsonIssues.every((issue) => issue.severity !== "error")
-  const imageReady = imageFileName !== null && imageIssues.length === 0
+  const imageReady = imageFileName === null ? imageOptional : imageIssues.length === 0
   const needsAcknowledgment = validation !== null && (validation.categoryConflict || validation.channelConflict)
   const acknowledged = !needsAcknowledgment || conflictsAcknowledged
   const ready = jsonReady && imageReady && acknowledged
@@ -82,8 +88,8 @@ export function ValidationPreview({
   if (validation) {
     summaryParts.push(
       validation.ok
-        ? `Your ${sourceKind === "html" ? "HTML" : "JSON"} file contains ${validation.totalRecords} video record${validation.totalRecords === 1 ? "" : "s"}. All records passed validation.`
-        : `Your ${sourceKind === "html" ? "HTML" : "JSON"} file contains ${validation.totalRecords} video record${validation.totalRecords === 1 ? "" : "s"}, but ${validation.invalidCount} of them failed validation.`,
+        ? `Your ${sourceKind === "html" ? "HTML" : "JSON"} file contains ${validation.totalRecords} ${recordNoun} record${validation.totalRecords === 1 ? "" : "s"}. All records passed validation.`
+        : `Your ${sourceKind === "html" ? "HTML" : "JSON"} file contains ${validation.totalRecords} ${recordNoun} record${validation.totalRecords === 1 ? "" : "s"}, but ${validation.invalidCount} of them failed validation.`,
     )
     if (validation.duplicateCount > 0) {
       summaryParts.push(`${validation.duplicateCount} duplicate record${validation.duplicateCount === 1 ? " was" : "s were"} detected and will be imported once.`)
@@ -100,8 +106,10 @@ export function ValidationPreview({
       )
     }
   }
-  if (imageReady) {
+  if (imageFileName !== null && imageReady) {
     summaryParts.push("Your batch image is ready.")
+  } else if (imageFileName === null && imageOptional) {
+    summaryParts.push("No batch image is needed - each product has its own picture.")
   }
   summaryParts.push(
     ready
@@ -165,7 +173,9 @@ export function ValidationPreview({
                     </span>
                   </>
                 ) : (
-                  <span className="text-muted-foreground">No image selected</span>
+                  <span className="text-muted-foreground">
+                    {imageOptional ? "Not needed for products" : "No image selected"}
+                  </span>
                 )}
               </div>
             </dd>
@@ -208,7 +218,7 @@ export function ValidationPreview({
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
             This file mixes multiple {validation?.categoryConflict ? "categories" : ""}
             {validation?.categoryConflict && validation?.channelConflict ? " and " : ""}
-            {validation?.channelConflict ? "channels" : ""}. Each video keeps its own values from the file. Tick the confirmation above to approve this batch.
+            {validation?.channelConflict ? "channels" : ""}. Each {recordNoun} keeps its own values from the file. Tick the confirmation above to approve this batch.
           </p>
         )}
 

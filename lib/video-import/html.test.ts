@@ -340,7 +340,7 @@ describe("parseHtmlImport with no usable links", () => {
     expect(result.ok).toBe(false)
     expect(result.records).toHaveLength(0)
     expect(result.issues[0].severity).toBe("error")
-    expect(result.issues[0].message).toContain("No YouTube or X")
+    expect(result.issues[0].message).toContain("No YouTube, X (Twitter), ASOS, Temu or SHEIN")
   })
 
   it("returns an error for HTML with no video links", () => {

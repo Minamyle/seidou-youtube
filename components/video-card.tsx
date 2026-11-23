@@ -1,11 +1,12 @@
 "use client"
 
+import { useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { AlertTriangle, Trash2 } from "lucide-react"
+import { AlertTriangle, ExternalLink, Trash2 } from "lucide-react"
 import type { VideoData } from "@/lib/types"
-import { detectVideoPlatform } from "@/lib/video-import/platforms"
+import { detectVideoPlatform, isRetailPlatform, PLATFORM_LABELS } from "@/lib/video-import/platforms"
 
 interface VideoCardProps {
   video: VideoData
@@ -13,12 +14,22 @@ interface VideoCardProps {
 }
 
 export function VideoCard({ video, onDelete }: VideoCardProps) {
+  const [imageFailed, setImageFailed] = useState(false)
   const detected = detectVideoPlatform(video.videoUrl)
-  const embedUrl = detected
-    ? detected.platform === "youtube"
-      ? `https://www.youtube.com/embed/${detected.externalId}`
-      : `https://platform.twitter.com/embed/Tweet.html?id=${detected.externalId}`
-    : null
+  const platform = detected?.platform ?? null
+  const isRetail = isRetailPlatform(platform)
+  const platformLabel = platform ? PLATFORM_LABELS[platform] : null
+
+  const embedUrl =
+    platform === "youtube"
+      ? `https://www.youtube.com/embed/${detected?.externalId}`
+      : platform === "x"
+        ? `https://platform.twitter.com/embed/Tweet.html?id=${detected?.externalId}`
+        : null
+
+  // ASOS, Temu and SHEIN records are product picture posts: show the picture,
+  // and link it to the product page. Product photos are usually portrait.
+  const productImage = isRetail && video.imageUrl && !imageFailed ? video.imageUrl : null
 
   return (
     <Card
@@ -31,7 +42,7 @@ export function VideoCard({ video, onDelete }: VideoCardProps) {
         </div>
       )}
 
-      <div className="relative aspect-video overflow-hidden bg-muted">
+      <div className={`relative overflow-hidden bg-muted ${isRetail ? "aspect-[4/5]" : "aspect-video"}`}>
         {embedUrl ? (
           <iframe
             src={embedUrl}
@@ -40,6 +51,27 @@ export function VideoCard({ video, onDelete }: VideoCardProps) {
             allowFullScreen
             className="w-full h-full"
           />
+        ) : isRetail ? (
+          <a
+            href={video.videoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex w-full h-full items-center justify-center bg-white text-muted-foreground"
+          >
+            {productImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={productImage}
+                alt={video.videoTitle}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onError={() => setImageFailed(true)}
+                className="w-full h-full object-contain"
+              />
+            ) : (
+              <span className="text-sm">Picture unavailable · View on {platformLabel}</span>
+            )}
+          </a>
         ) : (
           <div className="w-full h-full flex items-center justify-center bg-muted text-muted-foreground">
             <p className="text-sm">Invalid video URL</p>
@@ -51,9 +83,22 @@ export function VideoCard({ video, onDelete }: VideoCardProps) {
           {video.videoTitle}
         </h3>
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <Badge variant="secondary" className="text-xs">
-            {video.channelName}
-          </Badge>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="secondary" className="text-xs">
+              {video.channelName}
+            </Badge>
+            {isRetail && platformLabel && (
+              <a
+                href={video.videoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {platformLabel}
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+          </div>
           {onDelete && (
             <Button
               variant="ghost"

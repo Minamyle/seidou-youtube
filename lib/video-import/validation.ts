@@ -9,7 +9,13 @@ import {
   SUPPORTED_PLATFORMS,
   type VideoPlatform,
 } from "./config"
-import { detectVideoPlatform, PLATFORM_LABELS } from "./platforms"
+import {
+  detectVideoPlatform,
+  emptyPlatformCounts,
+  isRetailPlatform,
+  PLATFORM_LABELS,
+  SUPPORTED_PLATFORM_LIST,
+} from "./platforms"
 
 export interface ValidationIssue {
   severity: "error" | "warning"
@@ -27,6 +33,7 @@ export interface VideoRecordInput {
   channelName: string
   actualChannelName: string | null
   isUnrelatedChannel: boolean
+  imageUrl: string | null
 }
 
 export interface ImportValidationResult {
@@ -49,6 +56,25 @@ export interface ImportValidationResult {
 export type JsonReadResult =
   | { ok: true; text: string; issues: ValidationIssue[] }
   | { ok: false; issues: ValidationIssue[] }
+
+function optionalHttpUrl(example: string) {
+  return z
+    .string()
+    .trim()
+    .superRefine((value, ctx) => {
+      if (!value) return
+      try {
+        const parsed = new URL(value)
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must start with http:// or https://" })
+        }
+      } catch {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `must be a full URL such as ${example}` })
+      }
+    })
+    .nullish()
+    .transform((value) => (value ? value : null))
+}
 
 const videoRecordSchema = z
   .object({
@@ -73,7 +99,7 @@ const videoRecordSchema = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
-              "must be a full URL such as https://www.youtube.com/watch?v=... or https://x.com/user/status/...",
+              "must be a full URL such as https://www.youtube.com/watch?v=..., https://x.com/user/status/... or a product page link",
           })
           return
         }
@@ -81,19 +107,36 @@ const videoRecordSchema = z
         if (!detectVideoPlatform(value)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message:
-              "must be a YouTube or X (Twitter) video link - the video player only supports those platforms",
+            message: `must be a ${SUPPORTED_PLATFORM_LIST} link - the video player only supports those platforms. Retail links must be a product page (for example .../prd/123, ...-g-123.html or ...-p-123.html)`,
           })
         }
       }),
     platform: z.enum(SUPPORTED_PLATFORMS).optional(),
     actualChannelName: z.string().trim().min(1, "must not be empty when provided").nullish(),
     isUnrelatedChannel: z.boolean().optional().default(false),
+    imageUrl: optionalHttpUrl("https://img.ltwebstatic.com/images3/product.jpg"),
   })
   .superRefine((value, ctx) => {
+    const detected = detectVideoPlatform(value.videoUrl)
+
+    if (detected && isRetailPlatform(detected.platform) && !value.imageUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["imageUrl"],
+        message: `is required for ${PLATFORM_LABELS[detected.platform]} products - it is the picture shown in the feed`,
+      })
+    }
+
+    if (detected && !isRetailPlatform(detected.platform) && value.imageUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["imageUrl"],
+        message: `is only used for ASOS, Temu and SHEIN products; ${PLATFORM_LABELS[detected.platform]} videos play from videoUrl. Remove it`,
+      })
+    }
+
     if (!value.platform) return
 
-    const detected = detectVideoPlatform(value.videoUrl)
     if (detected && detected.platform !== value.platform) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -179,8 +222,48 @@ export async function readJsonFile(file: File | null | undefined): Promise<JsonR
   return { ok: true, text, issues }
 }
 
+/** Shown when a Product Collector file is given to the video import. */
+export const PRODUCT_FILE_MESSAGE =
+  "This is a products file from the Product Collector, not a video file. Import it on the Product Import page: click Product Import at the top, then the \"Import a JSON file\" tab."
+
+/**
+ * The Product Collector's products.json ({ source, title, products: [...] }, or
+ * just the products array). Those records have name/image instead of
+ * videoUrl/videoTitle, so the video checks would only say "invalid".
+ */
+export function isProductCollectorFile(parsed: unknown): boolean {
+  const isObject = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+
+  if (isObject(parsed) && Array.isArray(parsed.products)) return true
+  return (
+    Array.isArray(parsed) &&
+    parsed.length > 0 &&
+    parsed.every((item) => isObject(item) && "name" in item && "image" in item && !("videoUrl" in item))
+  )
+}
+
 export function validateVideoRecords(parsed: unknown): ImportValidationResult {
   const issues: ValidationIssue[] = []
+
+  if (isProductCollectorFile(parsed)) {
+    return {
+      ok: false,
+      totalRecords: 0,
+      validCount: 0,
+      invalidCount: 0,
+      duplicateCount: 0,
+      records: [],
+      categories: [],
+      category: null,
+      categoryConflict: false,
+      channelNames: [],
+      channelConflict: false,
+      platforms: [],
+      platformCounts: emptyPlatformCounts(),
+      issues: [{ severity: "error", message: PRODUCT_FILE_MESSAGE }],
+    }
+  }
 
   if (!Array.isArray(parsed)) {
     return {
@@ -196,7 +279,7 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
       channelNames: [],
       channelConflict: false,
       platforms: [],
-      platformCounts: { youtube: 0, x: 0 },
+      platformCounts: emptyPlatformCounts(),
       issues: [
         {
           severity: "error",
@@ -221,7 +304,7 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
       channelNames: [],
       channelConflict: false,
       platforms: [],
-      platformCounts: { youtube: 0, x: 0 },
+      platformCounts: emptyPlatformCounts(),
       issues: [{ severity: "error", message: "The file contains no video records. Add at least one record." }],
     }
   }
@@ -283,6 +366,7 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
         channelName: value.channelName,
         actualChannelName: value.actualChannelName ?? null,
         isUnrelatedChannel: value.isUnrelatedChannel,
+        imageUrl: value.imageUrl,
       },
     })
   })
@@ -316,7 +400,7 @@ export function validateVideoRecords(parsed: unknown): ImportValidationResult {
 
   const categories = [...new Set(records.map(({ record }) => record.category))]
   const channelNames = [...new Set(records.map(({ record }) => record.channelName))]
-  const platformCounts: Record<VideoPlatform, number> = { youtube: 0, x: 0 }
+  const platformCounts: Record<VideoPlatform, number> = emptyPlatformCounts()
   for (const record of uniqueRecords) {
     platformCounts[record.platform] += 1
   }

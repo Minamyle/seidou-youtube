@@ -10,13 +10,26 @@ export const IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as con
 
 export const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"] as const
 
-export const SUPPORTED_PLATFORMS = ["youtube", "x"] as const
+export const SUPPORTED_PLATFORMS = ["youtube", "x", "asos", "temu", "shein"] as const
 
 export type VideoPlatform = (typeof SUPPORTED_PLATFORMS)[number]
 
+/**
+ * Retail platforms are product picture posts, not videos. Their records point
+ * at the product page (videoUrl) and must carry the product picture (imageUrl).
+ */
+export const RETAIL_PLATFORMS = ["asos", "temu", "shein"] as const
+
+export type RetailPlatform = (typeof RETAIL_PLATFORMS)[number]
+
 export const REQUIRED_JSON_FIELDS = ["category", "channelName", "videoUrl", "videoTitle"] as const
 
-export const OPTIONAL_JSON_FIELDS = ["actualChannelName", "isUnrelatedChannel", "platform"] as const
+export const OPTIONAL_JSON_FIELDS = [
+  "actualChannelName",
+  "isUnrelatedChannel",
+  "platform",
+  "imageUrl",
+] as const
 
 export const KNOWN_JSON_FIELDS = [...REQUIRED_JSON_FIELDS, ...OPTIONAL_JSON_FIELDS] as const
 

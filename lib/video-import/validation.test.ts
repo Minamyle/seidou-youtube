@@ -3,6 +3,8 @@ import { JSON_FILE_MAX_BYTES, IMAGE_FILE_MAX_BYTES, MAX_RECORDS_PER_IMPORT } fro
 import {
   describeJsonParseError,
   formatBytes,
+  isProductCollectorFile,
+  PRODUCT_FILE_MESSAGE,
   readJsonFile,
   validateImageFile,
   validateVideoRecords,
@@ -252,7 +254,7 @@ describe("validateVideoRecords", () => {
     expect(result.records[0].platform).toBe("x")
     expect(result.records[0].externalId).toBe("1234567890123456789")
     expect(result.platforms).toEqual(["x"])
-    expect(result.platformCounts).toEqual({ youtube: 0, x: 1 })
+    expect(result.platformCounts).toEqual({ youtube: 0, x: 1, asos: 0, temu: 0, shein: 0 })
   })
 
   it("accepts twitter.com links with video suffixes and query strings", () => {
@@ -325,7 +327,7 @@ describe("validateVideoRecords", () => {
 
     expect(result.ok).toBe(true)
     expect(result.platforms).toEqual(["youtube", "x"])
-    expect(result.platformCounts).toEqual({ youtube: 1, x: 1 })
+    expect(result.platformCounts).toEqual({ youtube: 1, x: 1, asos: 0, temu: 0, shein: 0 })
   })
 })
 
@@ -399,5 +401,23 @@ describe("formatBytes", () => {
     expect(formatBytes(0)).toBe("0 B")
     expect(formatBytes(2048)).toBe("2.0 KB")
     expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB")
+  })
+})
+
+describe("validateVideoRecords with a Product Collector file", () => {
+  const product = { id: "1", name: "Mango co-ord", image: "https://images.asos-media.com/a", images: [], url: "https://www.asos.com/a/grp/1" }
+
+  it("explains where to import a products.json object", () => {
+    const result = validateVideoRecords({ source: "https://www.asos.com/x", title: "Mango", products: [product] })
+    expect(result.ok).toBe(false)
+    expect(result.issues).toEqual([{ severity: "error", message: PRODUCT_FILE_MESSAGE }])
+  })
+
+  it("explains where to import a bare products array", () => {
+    expect(validateVideoRecords([product]).issues[0].message).toBe(PRODUCT_FILE_MESSAGE)
+  })
+
+  it("still validates normal video records", () => {
+    expect(isProductCollectorFile([{ videoUrl: "https://youtu.be/3Iyuym-Gci0", name: "x", image: "y" }])).toBe(false)
   })
 })

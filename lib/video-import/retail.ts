@@ -186,11 +186,19 @@ function extractListing(
     title: string
     imageUrl: string | null
     brand: string | null
+    /** The title came from the page's product data, which is cleaner than card text. */
+    trustedTitle: boolean
   }
 
   const byId = new Map<string, Candidate>()
 
-  const consider = (rawUrl: string | null | undefined, title: string, imageUrl: string | null, brand: string | null) => {
+  const consider = (
+    rawUrl: string | null | undefined,
+    title: string,
+    imageUrl: string | null,
+    brand: string | null,
+    trustedTitle = false,
+  ) => {
     if (!rawUrl) return
     const resolved = resolveUrl(rawUrl, origin)
     if (!resolved) return
@@ -201,16 +209,18 @@ function extractListing(
 
     const existing = byId.get(detected.externalId)
     if (!existing) {
-      byId.set(detected.externalId, { url, title, imageUrl, brand })
+      byId.set(detected.externalId, { url, title, imageUrl, brand, trustedTitle: trustedTitle && title.length > 0 })
       return
     }
-    if (title.length > existing.title.length) existing.title = title
+    // Card text is often longer only because of badges and prices, so a name
+    // from the page's product data is kept once found.
+    if (!existing.trustedTitle && title.length > existing.title.length) existing.title = title
     existing.imageUrl ??= imageUrl
     existing.brand ??= brand
   }
 
   for (const product of products) {
-    consider(product.url, cleanTitle(product.name), absoluteUrl(product.image), product.brand)
+    consider(product.url, cleanTitle(product.name), absoluteUrl(product.image), product.brand, true)
   }
 
   for (const { href, attributes, inner } of findAnchors(html)) {
@@ -460,8 +470,20 @@ function cleanTitle(value: string | null | undefined): string {
   // Image descriptions end in " - view 1".
   title = title.replace(/\s+-\s+view\s+\d+$/i, "")
 
+  // Badges shops put before the name: "-15%", "Last 2 days" (SHEIN),
+  // "Top pick" (Temu). Removed one after another from the start.
+  let previous: string
+  do {
+    previous = title
+    title = title.replace(TITLE_BADGE, "").trim()
+  } while (title !== previous && title.length > 0)
+  if (!title) title = previous
+
   return title.replace(TITLE_SUFFIX, "").trim()
 }
+
+const TITLE_BADGE =
+  /^(?:-?\d{1,2}\s?%(?:\s?off)?|last\s+\d+\s+days?|top\s+pick|best\s?seller|hot\s+sale|trending|almost\s+sold\s+out|selling\s+fast|quickship|local\s+warehouse)(?=\s|$)\s*/i
 
 function absoluteUrl(value: string | null | undefined): string | null {
   if (!value) return null
@@ -470,9 +492,26 @@ function absoluteUrl(value: string | null | undefined): string | null {
   const withProtocol = trimmed.startsWith("//") ? `https:${trimmed}` : trimmed
   try {
     const parsed = new URL(withProtocol)
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : null
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null
+    return repairDoubledHost(parsed).toString()
   } catch {
     return null
+  }
+}
+
+/**
+ * SHEIN's own product data glues its site onto protocol-relative picture
+ * links: "https://www.shein.com//img.ltwebstatic.com/x.jpg". That asks
+ * www.shein.com for a path that does not exist. When a path starts with
+ * "//<hostname>/", the real link is https://<hostname>/...
+ */
+function repairDoubledHost(url: URL): URL {
+  const match = /^\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)(\/.*)?$/i.exec(url.pathname)
+  if (!match) return url
+  try {
+    return new URL(`https://${match[1]}${match[2] ?? "/"}${url.search}${url.hash}`)
+  } catch {
+    return url
   }
 }
 

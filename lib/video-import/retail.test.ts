@@ -348,3 +348,55 @@ describe("parseHtmlImport with a real ASOS listing card", () => {
     )
   })
 })
+
+describe("parseHtmlImport with a real SHEIN listing page", () => {
+  // Trimmed from a page saved with Ctrl+S: SHEIN's own JSON-LD glues
+  // www.shein.com onto its protocol-relative picture links, and card text
+  // starts with discount badges.
+  const pictureId = "1791977851b79d2a035a4e12da98f3e0f5579570eb_thumbnail_405x552.jpg"
+  const productUrl = "https://www.shein.com/Men-s-Zip-Up-Sweatshirt-p-517733152.html"
+  const html = page({
+    head:
+      `<link rel="canonical" href="https://www.shein.com/Men-Clothing-c-1969.html">` +
+      jsonLd({
+        "@type": "ItemList",
+        itemListElement: [
+          {
+            "@type": "ListItem",
+            item: {
+              "@type": "Product",
+              name: "Men's Autumn/Winter Zip-Up Sweatshirt",
+              url: productUrl,
+              image: `https://www.shein.com//img.ltwebstatic.com/v4/j/spmp/2026/10/14/b0/${pictureId}`,
+            },
+          },
+        ],
+      }),
+    body: `<a href="/Men-s-Zip-Up-Sweatshirt-p-517733152.html">-2% Last 2 days Men's Autumn/Winter Zip-Up Sweatshirt with extra card text</a>`,
+  })
+
+  it("repairs the picture link and keeps the clean product name", () => {
+    const result = parseHtmlImport(html, "Men.html")
+
+    expect(result.records).toHaveLength(1)
+    expect(result.records[0]).toMatchObject({
+      platform: "shein",
+      videoUrl: productUrl,
+      videoTitle: "Men's Autumn/Winter Zip-Up Sweatshirt",
+      imageUrl: `https://img.ltwebstatic.com/v4/j/spmp/2026/10/14/b0/${pictureId}`,
+    })
+  })
+
+  it("strips leading badges from card titles but keeps names like New Balance", () => {
+    const cards = page({
+      head: `<link rel="canonical" href="https://www.temu.com/ng/womens-dresses-o3-1.html">`,
+      body:
+        `<a href="/ng/floral-dress-g-601000000011.html"><img src="https://img.kwcdn.com/a.jpg" alt="x">Top pick Elegant Floral Dress</a>` +
+        `<a href="/ng/trainers-g-601000000012.html"><img src="https://img.kwcdn.com/b.jpg" alt="x">New Balance 530 trainers</a>`,
+    })
+    expect(parseHtmlImport(cards, "x.html").records.map((record) => record.videoTitle)).toEqual([
+      "Elegant Floral Dress",
+      "New Balance 530 trainers",
+    ])
+  })
+})

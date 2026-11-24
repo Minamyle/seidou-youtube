@@ -80,7 +80,20 @@ export async function scrapeAsos(url: URL, limit: number, offset: number, deep: 
   api.searchParams.set("limit", String(limit));
   api.searchParams.set("offset", String(offset));
 
-  const res = await fetch(api.toString(), { cache: "no-store", signal: AbortSignal.timeout(20000) });
+  // ASOS usually does not answer cloud servers (e.g. Vercel) at all, so the
+  // request times out. Say so plainly instead of "operation was aborted".
+  const blockedMessage =
+    "ASOS did not answer. ASOS blocks requests from cloud servers such as Vercel, so collecting only works when this tool runs on your own computer (npm run dev). Collect there, then import the products here with the \"Import a JSON file\" tab, or import straight from your computer.";
+  let res: Response;
+  try {
+    res = await fetch(api.toString(), { cache: "no-store", signal: AbortSignal.timeout(20000) });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new Error(blockedMessage);
+    }
+    throw error;
+  }
+  if (res.status === 403 || res.status === 429) throw new Error(blockedMessage);
   if (!res.ok) throw new Error(`ASOS responded with status ${res.status}`);
   const data = await res.json();
 

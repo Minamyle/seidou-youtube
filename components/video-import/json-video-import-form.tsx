@@ -469,7 +469,7 @@ export function JsonVideoImportForm() {
                 <AlertDescription className="space-y-3">
                   <p>
                     Files from the Product Collector are imported on the Product Import page, in the
-                    &quot;Import a JSON file&quot; tab.
+                    &quot;Import a saved page or file&quot; tab.
                   </p>
                   <Button asChild size="sm">
                     <Link href="/products">Go to Product Import</Link>

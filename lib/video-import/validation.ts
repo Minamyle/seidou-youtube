@@ -224,7 +224,7 @@ export async function readJsonFile(file: File | null | undefined): Promise<JsonR
 
 /** Shown when a Product Collector file is given to the video import. */
 export const PRODUCT_FILE_MESSAGE =
-  "This is a products file from the Product Collector, not a video file. Import it on the Product Import page: click Product Import at the top, then the \"Import a JSON file\" tab."
+  "This is a products file from the Product Collector, not a video file. Import it on the Product Import page: click Product Import at the top, then the \"Import a saved page or file\" tab."
 
 /**
  * The Product Collector's products.json ({ source, title, products: [...] }, or

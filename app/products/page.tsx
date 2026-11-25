@@ -33,7 +33,7 @@ export default function ProductsPage() {
         <Tabs defaultValue="collect" className="space-y-6">
           <TabsList>
             <TabsTrigger value="collect">Collect from a link</TabsTrigger>
-            <TabsTrigger value="json">Import a JSON file</TabsTrigger>
+            <TabsTrigger value="json">Import a saved page or file</TabsTrigger>
           </TabsList>
           <TabsContent value="collect">
             <ProductCollector />

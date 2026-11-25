@@ -129,7 +129,11 @@ export function parseHtmlImport(html: string, fileName: string): HtmlImportResul
   // a shop's footer (YouTube, X) are never imported as videos.
   const retailPlatform = detectRetailPage(html)
   if (retailPlatform) {
-    const records = extractRetailRecords(html, retailPlatform, parseFileName(fileName), issues)
+    // Prices are only stored by the Product Import (lib/product-collector/html-file.ts);
+    // the video import's JSON has no price field, so it is dropped here.
+    const records: HtmlVideoRecord[] = extractRetailRecords(html, retailPlatform, parseFileName(fileName), issues).map(
+      ({ price: _price, ...record }) => record,
+    )
 
     if (records.length === 0) {
       issues.push({

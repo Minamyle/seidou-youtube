@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto"
 import { type NextRequest, NextResponse } from "next/server"
+import { parseShopHtml } from "@/lib/product-collector/html-file"
 import { parseProductFile } from "@/lib/product-collector/json-file"
+import { readHtmlFile } from "@/lib/video-import/html"
 import { toProductRecords } from "@/lib/product-collector/to-records"
 import { getServiceClient, SupabaseConfigError } from "@/lib/supabase/server"
 import { BATCH_IMAGE_BUCKET, MAX_REQUEST_BYTES } from "@/lib/video-import/config"
@@ -76,11 +78,14 @@ async function readFormInput(request: NextRequest): Promise<ImportInput | NextRe
     return fail(400, "missing_json", "No JSON file was uploaded. Choose a JSON file and try again.")
   }
 
-  const read = await readJsonFile(jsonFile)
-  if (!read.ok) return fail(422, "invalid_json_file", "The JSON file could not be accepted.", read.issues)
+  // A saved shop page (.html) or a product JSON file. Both are read again here
+  // rather than trusting what the browser showed.
+  const isPage = /\.html?$/i.test(jsonFile.name)
+  const read = isPage ? await readHtmlFile(jsonFile) : await readJsonFile(jsonFile)
+  if (!read.ok) return fail(422, "invalid_json_file", "The file could not be accepted.", read.issues)
 
-  const file = parseProductFile(JSON.parse(read.text))
-  if (!file.ok) return fail(422, "invalid_json_file", "The JSON file has no products to import.", file.issues)
+  const file = isPage ? parseShopHtml(read.text, jsonFile.name) : parseProductFile(JSON.parse(read.text))
+  if (!file.ok) return fail(422, "invalid_json_file", "The file has no products to import.", file.issues)
 
   const image = form.get("image")
   const category = form.get("category")

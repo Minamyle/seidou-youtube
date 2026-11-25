@@ -34,6 +34,17 @@ export interface RetailRecord {
   actualChannelName: string | null
   isUnrelatedChannel: boolean
   imageUrl: string
+  /** Price as found on the page, when there is one (not stored by the video import). */
+  price: ShopPrice | null
+}
+
+export interface ShopPrice {
+  /** e.g. 21405 or 14.31 */
+  value: number
+  /** ISO code, e.g. NGN, USD, GBP */
+  currency: string | null
+  /** As a shopper would read it, e.g. "₦21,405" or "$14.31" */
+  text: string
 }
 
 interface RetailDefaults {
@@ -46,6 +57,36 @@ interface LdProduct {
   url: string | null
   brand: string | null
   image: string | null
+  price: ShopPrice | null
+}
+
+const CURRENCY_BY_SYMBOL: Record<string, string> = { $: "USD", "US$": "USD", "£": "GBP", "€": "EUR", "₦": "NGN" }
+const SYMBOL_BY_CURRENCY: Record<string, string> = { USD: "$", GBP: "£", EUR: "€", NGN: "₦" }
+
+/** The first price in some text: "₦21,405", "$14.31", "£49.99", "USD 20". */
+export function parsePrice(text: string | null | undefined): ShopPrice | null {
+  if (!text) return null
+  const match = /(US\$|USD|GBP|EUR|NGN|[$£€₦])\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i.exec(text)
+  if (!match) return null
+  const value = Number(match[2].replace(/,/g, ""))
+  if (!Number.isFinite(value) || value <= 0) return null
+  const marker = match[1].toUpperCase()
+  const currency = CURRENCY_BY_SYMBOL[match[1]] ?? (/^[A-Z]{3}$/.test(marker) ? marker : null)
+  return { value, currency, text: match[0].replace(/\s+/g, "") }
+}
+
+/** A price from JSON-LD offers: { price, priceCurrency } (or lowPrice, or an array of offers). */
+function priceFromOffers(offers: unknown): ShopPrice | null {
+  const offer = Array.isArray(offers) ? offers[0] : offers
+  if (!offer || typeof offer !== "object") return null
+  const record = offer as Record<string, unknown>
+  const raw = record.price ?? record.lowPrice
+  const value = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.replace(/,/g, "")) : NaN
+  if (!Number.isFinite(value) || value <= 0) return null
+  const currency = typeof record.priceCurrency === "string" ? record.priceCurrency.toUpperCase() : null
+  const symbol = currency ? SYMBOL_BY_CURRENCY[currency] : undefined
+  const amount = value.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: Number.isInteger(value) ? 0 : 2 })
+  return { value, currency, text: symbol ? `${symbol}${amount}` : `${currency ?? ""} ${amount}`.trim() }
 }
 
 const DEFAULT_ORIGINS: Record<RetailPlatform, string> = {
@@ -158,6 +199,15 @@ function extractProductPage(
   const brand = product?.brand?.trim() || null
   const imageUrl =
     absoluteUrl(product?.image) ?? absoluteUrl(getMeta(html, "og:image")) ?? findFirstProductImage(html, platform)
+  const metaAmount = getMeta(html, "product:price:amount") ?? getMeta(html, "og:price:amount")
+  const price =
+    product?.price ??
+    (metaAmount
+      ? priceFromOffers({
+          price: metaAmount,
+          priceCurrency: getMeta(html, "product:price:currency") ?? getMeta(html, "og:price:currency"),
+        })
+      : null)
 
   return {
     category: defaults.category,
@@ -168,6 +218,7 @@ function extractProductPage(
     actualChannelName: brand,
     isUnrelatedChannel: false,
     imageUrl,
+    price,
   }
 }
 
@@ -188,6 +239,7 @@ function extractListing(
     brand: string | null
     /** The title came from the page's product data, which is cleaner than card text. */
     trustedTitle: boolean
+    price: ShopPrice | null
   }
 
   const byId = new Map<string, Candidate>()
@@ -198,6 +250,7 @@ function extractListing(
     imageUrl: string | null,
     brand: string | null,
     trustedTitle = false,
+    price: ShopPrice | null = null,
   ) => {
     if (!rawUrl) return
     const resolved = resolveUrl(rawUrl, origin)
@@ -209,7 +262,7 @@ function extractListing(
 
     const existing = byId.get(detected.externalId)
     if (!existing) {
-      byId.set(detected.externalId, { url, title, imageUrl, brand, trustedTitle: trustedTitle && title.length > 0 })
+      byId.set(detected.externalId, { url, title, imageUrl, brand, trustedTitle: trustedTitle && title.length > 0, price })
       return
     }
     // Card text is often longer only because of badges and prices, so a name
@@ -217,21 +270,26 @@ function extractListing(
     if (!existing.trustedTitle && title.length > existing.title.length) existing.title = title
     existing.imageUrl ??= imageUrl
     existing.brand ??= brand
+    existing.price ??= price
   }
 
   for (const product of products) {
-    consider(product.url, cleanTitle(product.name), absoluteUrl(product.image), product.brand, true)
+    consider(product.url, cleanTitle(product.name), absoluteUrl(product.image), product.brand, true, product.price)
   }
 
-  for (const { href, attributes, inner } of findAnchors(html)) {
+  for (const { href, attributes, inner, end } of findAnchors(html)) {
     const imgTag = /<img\b[^>]*>/i.exec(inner)?.[0]
     const img = imgTag ? parseAttributes(imgTag) : null
+    const cardText = stripHtml(inner)
     const title =
-      cleanTitle(stripHtml(inner)) ||
+      cleanTitle(cardText) ||
       cleanTitle(attributes["title"]) ||
       cleanTitle(attributes["aria-label"]) ||
       cleanTitle(img?.alt)
-    consider(href, title, img ? imageFromAttributes(img) : null, null)
+    // The price is usually inside the card link; some shops print it just
+    // after the link, so the next bit of the card is checked too.
+    const price = parsePrice(cardText) ?? parsePrice(stripHtml(cardTail(html, end)))
+    consider(href, title, img ? imageFromAttributes(img) : null, null, false, price)
   }
 
   const records: RetailRecord[] = []
@@ -251,6 +309,7 @@ function extractListing(
       actualChannelName: candidate.brand,
       isUnrelatedChannel: false,
       imageUrl: candidate.imageUrl,
+      price: candidate.price,
     })
   }
 
@@ -366,6 +425,7 @@ function walkLd(node: unknown, products: LdProduct[], depth: number): void {
       url: asText(record.url) ?? asText(record["@id"]),
       brand: asText(record.brand) ?? asText((record.brand as Record<string, unknown> | undefined)?.name),
       image: firstImage(record.image),
+      price: priceFromOffers(record.offers),
     })
   }
 
@@ -439,15 +499,32 @@ function getMeta(html: string, property: string): string | null {
   return null
 }
 
-function findAnchors(html: string): { href: string; attributes: Record<string, string>; inner: string }[] {
-  const anchors: { href: string; attributes: Record<string, string>; inner: string }[] = []
+interface Anchor {
+  href: string
+  attributes: Record<string, string>
+  inner: string
+  /** Index in the page just after </a>. */
+  end: number
+}
+
+function findAnchors(html: string): Anchor[] {
+  const anchors: Anchor[] = []
   const pattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi
   let match: RegExpExecArray | null
   while ((match = pattern.exec(html))) {
     const attributes = parseAttributes(match[1])
-    if (attributes.href) anchors.push({ href: attributes.href.trim(), attributes, inner: match[2] })
+    if (attributes.href) {
+      anchors.push({ href: attributes.href.trim(), attributes, inner: match[2], end: match.index + match[0].length })
+    }
   }
   return anchors
+}
+
+/** The markup right after a card link, up to the next link (the next card) or 2,000 characters. */
+function cardTail(html: string, end: number): string {
+  const slice = html.slice(end, end + 2000)
+  const nextLink = slice.search(/<a\b/i)
+  return nextLink === -1 ? slice : slice.slice(0, nextLink)
 }
 
 /** A price such as "$76.00", "£12", "€9,99", "₦15,000" or "USD 20". */

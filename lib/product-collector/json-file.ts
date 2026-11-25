@@ -16,7 +16,8 @@ import type { Product } from "./types"
  */
 
 export interface ProductFile {
-  format: "collector" | "library"
+  /** collector: products.json; library: home page export; page: a saved shop page (.html) */
+  format: "collector" | "library" | "page"
   products: Product[]
   /** The shop page the products came from, when the file says. */
   sourceUrl: string

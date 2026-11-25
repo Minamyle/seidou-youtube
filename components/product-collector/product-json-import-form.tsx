@@ -19,7 +19,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
+import { parseShopHtml } from "@/lib/product-collector/html-file"
 import { parseProductFile, type ProductFile } from "@/lib/product-collector/json-file"
+import { readHtmlFile } from "@/lib/video-import/html"
 import { toProductRecords } from "@/lib/product-collector/to-records"
 import { PLATFORM_LABELS } from "@/lib/video-import/platforms"
 import { formatBytes, readJsonFile, validateImageFile, type ValidationIssue } from "@/lib/video-import/validation"
@@ -80,13 +82,15 @@ export function ProductJsonImportForm() {
     if (!file || importing) return
     setImportState({ phase: "idle" })
 
-    const read = await readJsonFile(file)
+    // A saved Temu/SHEIN/ASOS page (.html) or a product JSON file.
+    const isPage = /\.html?$/i.test(file.name)
+    const read = isPage ? await readHtmlFile(file) : await readJsonFile(file)
     if (!read.ok) {
       setJson({ file, issues: read.issues, parsed: null })
       return
     }
 
-    const parsed = parseProductFile(JSON.parse(read.text))
+    const parsed = isPage ? parseShopHtml(read.text, file.name) : parseProductFile(JSON.parse(read.text))
     if (!parsed.ok) {
       setJson({ file, issues: [...read.issues, ...parsed.issues], parsed: null })
       return
@@ -175,12 +179,13 @@ export function ProductJsonImportForm() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Product JSON Import Form</CardTitle>
+        <CardTitle className="text-base">Product Import Form</CardTitle>
         <CardDescription>
-          Pick a product JSON file - <code>products.json</code> from the collector, or a video library export with
-          ASOS, Temu or SHEIN records - and push it to the <code>catalogue_products</code> table. Everything is checked
-          before anything is imported. Products already there are updated. A batch image is optional: each product has
-          its own picture.
+          Pick a saved shop page or a product JSON file and push it to the <code>catalogue_products</code> table, with
+          prices. For <strong>Temu and SHEIN</strong>, open a search or category page in your browser, scroll until the
+          products load, press Ctrl+S (&quot;Webpage, HTML only&quot;) and drop the .html file here. JSON files can be{" "}
+          <code>products.json</code> from the collector or a video library export. Everything is checked before
+          anything is imported; products already there are updated. A batch image is optional.
         </CardDescription>
       </CardHeader>
 
@@ -204,7 +209,7 @@ export function ProductJsonImportForm() {
               ref={jsonInputRef}
               id="product-json-input"
               type="file"
-              accept=".json,application/json"
+              accept=".json,.html,.htm,application/json,text/html"
               className="sr-only"
               aria-labelledby="product-json-label"
               disabled={importing}
@@ -214,11 +219,13 @@ export function ProductJsonImportForm() {
             {json === null ? (
               <div className="flex flex-col items-center gap-3 text-center">
                 <FileJson className="h-8 w-8 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">Drag a .json file here, or choose one below.</p>
+                <p className="text-sm text-muted-foreground">
+                  Drag a saved shop page (.html) or a .json file here, or choose one below.
+                </p>
                 <Button asChild variant="outline" size="sm" disabled={importing}>
                   <label htmlFor="product-json-input" className="cursor-pointer">
                     <Upload className="mr-1.5 h-3.5 w-3.5" />
-                    Choose JSON File
+                    Choose File
                   </label>
                 </Button>
               </div>
@@ -232,7 +239,13 @@ export function ProductJsonImportForm() {
                   <p className="text-xs text-muted-foreground">{formatBytes(json.file.size)}</p>
                 </div>
                 {json.parsed && (
-                  <Badge variant="outline">{json.parsed.format === "collector" ? "Collector file" : "Library export"}</Badge>
+                  <Badge variant="outline">
+                    {json.parsed.format === "page"
+                      ? "Saved shop page"
+                      : json.parsed.format === "collector"
+                        ? "Collector file"
+                        : "Library export"}
+                  </Badge>
                 )}
                 <Badge variant={jsonReady && conversion?.ok ? "default" : "destructive"}>
                   {jsonReady && conversion?.ok ? "Valid" : "Invalid"}
